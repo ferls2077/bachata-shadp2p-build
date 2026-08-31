@@ -147,18 +147,18 @@ jobs:
           # Bachata ARM64 does not have the newer ShadNet log class.
           # Map all shadNet logging to an existing Bachata NP logger.
           for shadnet_file in (root / "src/shadnet").rglob("*"):
-          if shadnet_file.suffix not in (".cpp", ".h"):
-           continue
+              if shadnet_file.suffix not in (".cpp", ".h"):
+                   continue
 
-            shadnet_text = shadnet_file.read_text()
+              shadnet_text = shadnet_file.read_text()
 
-          for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE", "CRITICAL"):
-           shadnet_text = shadnet_text.replace(
-            f"LOG_{level}(ShadNet,",
-            f"LOG_{level}(Lib_NpManager,"
-              )
+              for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE", "CRITICAL"):
+                   shadnet_text = shadnet_text.replace(
+                       f"LOG_{level}(ShadNet,",
+                       f"LOG_{level}(Lib_NpManager,"
+                  )
 
-           shadnet_file.write_text(shadnet_text)
+               shadnet_file.write_text(shadnet_text)
 
            bloodborne_re.write_text(r'''// ARM64 Bachata compatibility implementation
            #include "core/bloodborne_re.h"
