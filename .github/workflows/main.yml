@@ -95,8 +95,9 @@ jobs:
           cmake = root / 'CMakeLists.txt'
           ext_cmake = root / 'externals/CMakeLists.txt'
           arm_script = root / 'runtime/scripts/build-shadps4-arm64.sh'
+          
           settings = root / 'src/core/emulator_settings.h'
-
+          libs_cpp = root / 'src/core/libraries/libs.cpp'
           text = cmake.read_text()
 
           if '# shadNet protobuf generation (Android ARM64)' not in text:
@@ -238,7 +239,16 @@ jobs:
               1
           )
           cmake.write_text(text)
+                    libs_text = libs_cpp.read_text()
 
+          old = '#include "core/libraries/np/np_matching2.h"'
+          new = '#include "core/libraries/np/np_matching2/np_matching2.h"'
+
+          if old not in libs_text:
+              raise SystemExit('old np_matching2 include in libs.cpp not found')
+
+          libs_text = libs_text.replace(old, new, 1)
+          libs_cpp.write_text(libs_text)
           ext = ext_cmake.read_text()
 
           if '# protobuf (required by shadNet)' not in ext:
