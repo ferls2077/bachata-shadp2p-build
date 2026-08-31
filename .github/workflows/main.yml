@@ -114,7 +114,7 @@ jobs:
           settings = root / "src/core/emulator_settings.h"
           libs_cpp = root / "src/core/libraries/libs.cpp"
           np_handler = root / "src/core/libraries/np/np_handler.cpp"
-          server_probe = root / "src/shadnet/server_probe.cpp"
+          bloodborne_re = root / "src/core/bloodborne_re.cpp"
 
           handler_text = np_handler.read_text()
 
@@ -144,31 +144,74 @@ jobs:
               raise SystemExit("GetNpCommIds compatibility patch failed")
 
           np_handler.write_text(handler_text)
-          probe_text = server_probe.read_text()
+          # Bachata ARM64 does not have the newer ShadNet log class.
+          # Map all shadNet logging to an existing Bachata NP logger.
+          for shadnet_file in (root / "src/shadnet").rglob("*"):
+          if shadnet_file.suffix not in (".cpp", ".h"):
+           continue
 
-          for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE"):
-             probe_text = probe_text.replace(
-               f"LOG_{level}(ShadNet,",
-               f"LOG_{level}(Lib_NpManager,"
-             )
+            shadnet_text = shadnet_file.read_text()
 
-          server_probe.write_text(probe_text)
+          for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE", "CRITICAL"):
+           shadnet_text = shadnet_text.replace(
+            f"LOG_{level}(ShadNet,",
+            f"LOG_{level}(Lib_NpManager,"
+              )
 
-          text = cmake.read_text()
+           shadnet_file.write_text(shadnet_text)
+
+           bloodborne_re.write_text(r'''// ARM64 Bachata compatibility implementation
+           #include "core/bloodborne_re.h"
+
+           namespace Core::Bloodborne {
+
+           namespace {
+           std::optional<std::string> host_placement;
+           }
+
+           std::optional<std::string> GetSeamlessHostPlacementHeader() {
+           return host_placement;
+           }
+
+           bool SetSeamlessHostPlacementHeader(std::string_view value) {
+               host_placement = std::string(value);
+               return true;
+           }
+
+           void ClearSeamlessHostPlacementHeader() {
+               host_placement.reset();
+           }
+
+           void TraceMatching2LeaveRoom(std::uintptr_t return_address, std::uint64_t room_id) {
+               (void)return_address;
+               (void)room_id;
+           }
+
+           void InstallSeamlessCoopPatches() {
+           }
+
+           void InstallReverseEngineeringTrace() {
+           }
+
+           } // namespace Core::Bloodborne
+           ''')
+
+           text = cmake.read_text()
 
           if "# shadNet protobuf generation (Android ARM64)" not in text:
               marker = '''set(EMULATOR src/emulator.cpp
                        src/emulator.h
                        src/sdl_window.h
                        src/sdl_window.cpp
-          )
-          '''
-              if marker not in text:
+             )
+           '''
+          if marker not in text:
                   raise SystemExit("EMULATOR block not found")
 
               block = marker + r'''
 
           # shadNet protobuf generation (Android ARM64)
+         
           set(SHADNET_PROTO_PREGENERATED_DIR "" CACHE PATH
               "Directory containing pre-generated shadnet.pb.cc and shadnet.pb.h")
 
@@ -194,7 +237,7 @@ jobs:
               )
           endif()
 
-          set(SHADNET
+              set(SHADNET
               src/shadnet/client.cpp
               src/shadnet/client.h
               src/shadnet/server_probe.cpp
