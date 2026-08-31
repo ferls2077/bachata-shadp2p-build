@@ -51,11 +51,11 @@ jobs:
           git -C p2p fetch --depth=1 --filter=blob:none origin "$SHADP2P_SHA"
           git -C p2p checkout --detach FETCH_HEAD
 
-          rm -rf core/src/core/libraries/np
+          
           rm -rf core/src/core/libraries/network
           rm -rf core/src/shadnet
 
-          cp -a p2p/src/core/libraries/np core/src/core/libraries/
+          cp -a p2p/src/core/libraries/np/. core/src/core/libraries/np/
           cp -a p2p/src/core/libraries/network core/src/core/libraries/
           cp -a p2p/src/shadnet core/src/
 
