@@ -1,4 +1,4 @@
-name: Build Bachata shadp2p APK
+.github/workflows/main.ymlname: Build Bachata shadp2p APK
 
 on:
   workflow_dispatch:
