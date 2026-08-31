@@ -251,6 +251,15 @@ jobs:
               raise SystemExit('old np_matching2 include in libs.cpp not found')
 
           libs_text = libs_text.replace(old, new, 1)
+          
+          old = '#include "core/libraries/np/np_web_api2.h"'
+          new = '#include "core/libraries/np/np_web_api2/np_web_api2.h"'
+
+          if old not in libs_text:
+              raise SystemExit('old np_web_api2 include in libs.cpp not found')
+
+          libs_text = libs_text.replace(old, new, 1)
+          
           libs_cpp.write_text(libs_text)
           ext = ext_cmake.read_text()
 
