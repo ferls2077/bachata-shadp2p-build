@@ -147,10 +147,10 @@ jobs:
           probe_text = server_probe.read_text()
 
           for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE"):
-          probe_text = probe_text.replace(
-          f"LOG_{level}(ShadNet,",
-          f"LOG_{level}(Lib_NpManager,"
-           )
+             probe_text = probe_text.replace(
+               f"LOG_{level}(ShadNet,",
+               f"LOG_{level}(Lib_NpManager,"
+             )
 
           server_probe.write_text(probe_text)
 
