@@ -147,14 +147,14 @@ jobs:
           # Bachata ARM64 does not have the newer ShadNet log class.
           # Map all shadNet logging to an existing Bachata NP logger.
           for name in ("client.cpp", "server_probe.cpp"):
-          path = root / "src/shadnet" / name
-          shadnet_text = path.read_text()
+              path = root / "src/shadnet" / name
+              shadnet_text = path.read_text()
 
           for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE", "CRITICAL"):
-          shadnet_text = shadnet_text.replace(
-            f"LOG_{level}(ShadNet,",
-            f"LOG_{level}(Lib_NpManager,"
-           )
+              shadnet_text = shadnet_text.replace(
+                  f"LOG_{level}(ShadNet,",
+                  f"LOG_{level}(Lib_NpManager,"
+              )
 
            path.write_text(shadnet_text)
 
