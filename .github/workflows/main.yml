@@ -127,6 +127,28 @@ jobs:
           handler_text = handler_text.replace('LOG_ERROR(NpHandler,', 'LOG_ERROR(Lib_NpManager,')
           handler_text = handler_text.replace('LOG_DEBUG(NpHandler,', 'LOG_DEBUG(Lib_NpManager,')
           handler_text = handler_text.replace('LOG_TRACE(NpHandler,', 'LOG_TRACE(Lib_NpManager,')
+
+          old = '''    const auto& ids = Common::ElfInfo::Instance().GetNpCommIds();
+          std::string com_id;
+          if (!ids.empty()) {
+          const size_t idx = (service_label >= 0 && static_cast<size_t>(service_label) < ids.size())
+                                ? static_cast<size_t>(service_label)
+                               : 0;
+          com_id = ids[idx];
+          if (static_cast<size_t>(service_label) >= ids.size()) {
+           LOG_WARNING(NpHandler,
+                        "GetNpCommId: service_label={} >= npbind entry count {} — falling back "
+                        "to index 0",
+                        service_label, ids.size());
+            }
+           }'''
+
+           new = '''    std::string com_id;'''
+
+          if old not in handler_text:
+          raise SystemExit('GetNpCommIds block not found')
+ 
+          handler_text = handler_text.replace(old, new, 1)
           np_handler.write_text(handler_text)
           
           text = cmake.read_text()
