@@ -47,6 +47,7 @@ jobs:
           git -C p2p sparse-checkout set \
           src/core/libraries/np \
           src/core/libraries/network \
+          src/core/libraries/invitation_dialog \
           src/core/bloodborne_re.h \
           src/core/bloodborne_re.cpp \
           src/shadnet
@@ -66,6 +67,7 @@ jobs:
 
           cp -a p2p/src/core/libraries/np core/src/core/libraries/
           cp -a p2p/src/core/libraries/network core/src/core/libraries/
+          cp -a p2p/src/core/libraries/invitation_dialog core/src/core/libraries/
           cp -a p2p/src/shadnet core/src/
           cp p2p/src/core/bloodborne_re.h core/src/core/
           cp p2p/src/core/bloodborne_re.cpp core/src/core/
