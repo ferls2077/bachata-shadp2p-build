@@ -52,12 +52,19 @@ jobs:
           git -C p2p checkout --detach FETCH_HEAD
 
           
+          cp core/src/core/libraries/np/np_commerce.cpp /tmp/np_commerce.cpp
+          cp core/src/core/libraries/np/np_commerce.h /tmp/np_commerce.h
+
+          rm -rf core/src/core/libraries/np
           rm -rf core/src/core/libraries/network
           rm -rf core/src/shadnet
 
-          cp -a p2p/src/core/libraries/np/. core/src/core/libraries/np/
+          cp -a p2p/src/core/libraries/np core/src/core/libraries/
           cp -a p2p/src/core/libraries/network core/src/core/libraries/
           cp -a p2p/src/shadnet core/src/
+
+          cp /tmp/np_commerce.cpp core/src/core/libraries/np/
+          cp /tmp/np_commerce.h core/src/core/libraries/np/
 
           test "$(git -C p2p hash-object src/core/libraries/np/np_handler.cpp)" = \
             d9ce291fc71731e938c02bebb580e21e5644f088
