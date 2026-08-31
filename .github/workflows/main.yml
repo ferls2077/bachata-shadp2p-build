@@ -45,9 +45,11 @@ jobs:
           git -C p2p remote add origin https://github.com/Wozzardman/shadp2p.git
           git -C p2p sparse-checkout init --cone
           git -C p2p sparse-checkout set \
-            src/core/libraries/np \
-            src/core/libraries/network \
-            src/shadnet
+          src/core/libraries/np \
+          src/core/libraries/network \
+          src/core/bloodborne_re.h \
+          src/core/bloodborne_re.cpp \
+          src/shadnet
           git -C p2p fetch --depth=1 --filter=blob:none origin "$SHADP2P_SHA"
           git -C p2p checkout --detach FETCH_HEAD
 
@@ -62,6 +64,8 @@ jobs:
           cp -a p2p/src/core/libraries/np core/src/core/libraries/
           cp -a p2p/src/core/libraries/network core/src/core/libraries/
           cp -a p2p/src/shadnet core/src/
+          cp p2p/src/core/bloodborne_re.h core/src/core/
+          cp p2p/src/core/bloodborne_re.cpp core/src/core/
 
           cp /tmp/np_commerce.cpp core/src/core/libraries/np/
           cp /tmp/np_commerce.h core/src/core/libraries/np/
