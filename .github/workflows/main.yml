@@ -120,6 +120,14 @@ jobs:
           settings = root / 'src/core/emulator_settings.h'
           
           libs_cpp = root / 'src/core/libraries/libs.cpp'
+          np_handler = root / 'src/core/libraries/np/np_handler.cpp'
+          handler_text = np_handler.read_text()
+          handler_text = handler_text.replace('LOG_INFO(NpHandler,', 'LOG_INFO(Lib_Np,')
+          handler_text = handler_text.replace('LOG_WARNING(NpHandler,', 'LOG_WARNING(Lib_Np,')
+          handler_text = handler_text.replace('LOG_ERROR(NpHandler,', 'LOG_ERROR(Lib_Np,')
+          handler_text = handler_text.replace('LOG_DEBUG(NpHandler,', 'LOG_DEBUG(Lib_Np,')
+          handler_text = handler_text.replace('LOG_TRACE(NpHandler,', 'LOG_TRACE(Lib_Np,')
+          np_handler.write_text(handler_text)
           
           text = cmake.read_text()
 
