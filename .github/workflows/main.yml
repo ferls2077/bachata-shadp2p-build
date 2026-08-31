@@ -356,7 +356,7 @@ jobs:
             --parallel 2
 
           PROTOC="$(
-            find /tmp/protobuf-host \
+            find -L /tmp/protobuf-host \
               -type f \
               -name protoc \
               -perm -111 |
