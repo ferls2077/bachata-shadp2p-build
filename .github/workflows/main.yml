@@ -114,6 +114,7 @@ jobs:
           settings = root / "src/core/emulator_settings.h"
           libs_cpp = root / "src/core/libraries/libs.cpp"
           np_handler = root / "src/core/libraries/np/np_handler.cpp"
+          server_probe = root / "src/shadnet/server_probe.cpp"
 
           handler_text = np_handler.read_text()
 
@@ -143,6 +144,15 @@ jobs:
               raise SystemExit("GetNpCommIds compatibility patch failed")
 
           np_handler.write_text(handler_text)
+          probe_text = server_probe.read_text()
+
+          for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE"):
+          probe_text = probe_text.replace(
+          f"LOG_{level}(ShadNet,",
+          f"LOG_{level}(Lib_NpManager,"
+           )
+
+          server_probe.write_text(probe_text)
 
           text = cmake.read_text()
 
