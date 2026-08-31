@@ -211,6 +211,32 @@ jobs:
                 src/core/libraries/np/np_matching2/np_matching2_signaling.h''',
               1
           )
+                    # Replace old ARM64 WebApi2 sources with shadp2p WebApi2
+          old = 'src/core/libraries/np/np_web_api2.cpp'
+          if old not in text:
+              raise SystemExit('old np_web_api2.cpp CMake entry not found')
+
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_web_api2/np_web_api2.cpp
+                src/core/libraries/np/np_web_api2/np_web_api2_context.cpp
+                src/core/libraries/np/np_web_api2/np_web_api2_internal.cpp
+                src/core/libraries/np/np_web_api2/np_web_api2_push_event.cpp''',
+              1
+          )
+
+          old = 'src/core/libraries/np/np_web_api2.h'
+          if old not in text:
+              raise SystemExit('old np_web_api2.h CMake entry not found')
+
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_web_api2/np_web_api2.h
+                src/core/libraries/np/np_web_api2/np_web_api2_context.h
+                src/core/libraries/np/np_web_api2/np_web_api2_internal.h
+                src/core/libraries/np/np_web_api2/np_web_api2_push_event.h''',
+              1
+          )
           cmake.write_text(text)
 
           ext = ext_cmake.read_text()
