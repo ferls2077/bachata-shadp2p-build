@@ -185,7 +185,32 @@ jobs:
           ''',
                   1
               )
+                    # Replace old ARM64 Matching2 sources with shadp2p Matching2
+          old = 'src/core/libraries/np/np_matching2.cpp'
+          if old not in text:
+              raise SystemExit('old np_matching2.cpp CMake entry not found')
 
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_matching2/np_matching2.cpp
+                src/core/libraries/np/np_matching2/np_matching2_internal.cpp
+                src/core/libraries/np/np_matching2/np_matching2_mm.cpp
+                src/core/libraries/np/np_matching2/np_matching2_signaling.cpp''',
+              1
+          )
+
+          old = 'src/core/libraries/np/np_matching2.h'
+          if old not in text:
+              raise SystemExit('old np_matching2.h CMake entry not found')
+
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_matching2/np_matching2.h
+                src/core/libraries/np/np_matching2/np_matching2_internal.h
+                src/core/libraries/np/np_matching2/np_matching2_mm.h
+                src/core/libraries/np/np_matching2/np_matching2_signaling.h''',
+              1
+          )
           cmake.write_text(text)
 
           ext = ext_cmake.read_text()
