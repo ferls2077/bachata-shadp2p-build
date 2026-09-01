@@ -686,7 +686,6 @@ jobs:
           from pathlib import Path
           import hashlib
           import json
-          import re
           import zipfile
 
           decoded = Path("decoded")
@@ -735,26 +734,7 @@ jobs:
           manifest["runtimeVersion"] = f"{old_version}-shadp2p-{sha[:12]}"
           runtime_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
 
-          axml = decoded / "AndroidManifest.xml"
-          text = axml.read_text()
 
-          text = re.sub(
-              r'\s+android:usesCleartextTraffic="(?:true|false)"',
-              "",
-              text,
-              count=1
-          )
-
-          text = text.replace(
-              "<application ",
-              '<application android:usesCleartextTraffic="true" ',
-              1
-          )
-
-          if 'android:usesCleartextTraffic="true"' not in text:
-              raise SystemExit("failed to enable cleartext traffic")
-
-          axml.write_text(text)
           print("replacement ARM64 core sha256:", sha)
           print("runtime version:", manifest["runtimeVersion"])
           PY
