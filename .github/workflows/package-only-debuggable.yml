@@ -1,0 +1,411 @@
+name: Package Bachata shadp2p APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  package-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      DONOR_APK: https://github.com/JICA98/Bachata-S4/releases/download/v0.1.9/bachatas4-0.1.9-release.apk
+      DONOR_SHA256: ee6514f4148e3c6aa88ca0ef0ae1d41eaad464ca2d6cd1057d1c425504aa2ef2
+
+    steps:
+      - name: Find latest uploaded ARM64 core
+        id: find-core
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+
+          url = (
+              f"https://api.github.com/repos/{repo}/actions/artifacts"
+              "?name=shadp2p-arm64-core&per_page=100"
+          )
+
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "bachata-shadp2p-package-workflow",
+              },
+          )
+
+          with urllib.request.urlopen(request) as response:
+              data = json.load(response)
+
+          artifacts = [
+              artifact
+              for artifact in data.get("artifacts", [])
+              if artifact.get("name") == "shadp2p-arm64-core"
+              and not artifact.get("expired", False)
+              and artifact.get("workflow_run", {}).get("id")
+          ]
+
+          if not artifacts:
+              raise SystemExit("No non-expired shadp2p-arm64-core artifact was found.")
+
+          artifact = max(
+              artifacts,
+              key=lambda item: item.get("created_at", ""),
+          )
+
+          run_id = artifact["workflow_run"]["id"]
+          artifact_id = artifact["id"]
+
+          print("Using ARM64 core artifact:", artifact_id)
+          print("From workflow run:", run_id)
+          print("Created:", artifact.get("created_at"))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"run_id={run_id}\n")
+              output.write(f"artifact_id={artifact_id}\n")
+          PY
+
+      - name: Download existing ARM64 core
+        uses: actions/download-artifact@v4
+        with:
+          name: shadp2p-arm64-core
+          path: core-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.find-core.outputs.run_id }}
+
+      - name: Verify downloaded ARM64 core
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          BIN="$(
+            find core-artifact \
+              -type f \
+              -name shadps4-arm64 \
+              -print \
+              -quit
+          )"
+
+          test -n "$BIN"
+          test -s "$BIN"
+          chmod +x "$BIN"
+
+          file "$BIN"
+          readelf -h "$BIN" | grep -q 'AArch64'
+
+          if readelf -d "$BIN" | grep -q 'libprotobuf'; then
+            echo "ERROR: protobuf must be statically linked" >&2
+            exit 1
+          fi
+
+          grep -aFq 'TCP connected to' "$BIN"
+          grep -aFq 'Login packet sent for' "$BIN"
+          sha256sum "$BIN"
+
+      - name: Prepare APK tools and donor
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends default-jre-headless
+
+          curl -fL \
+            --retry 5 \
+            --retry-delay 2 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar \
+            -o apktool.jar
+
+          echo \
+            'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423  apktool.jar' |
+            sha256sum -c -
+
+          curl -fL \
+            --retry 5 \
+            --retry-delay 2 \
+            "$DONOR_APK" \
+            -o donor.apk
+
+          echo "$DONOR_SHA256  donor.apk" | sha256sum -c -
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -d "$SDK_ROOT/build-tools"
+
+          BUILD_TOOLS="$(
+            find "$SDK_ROOT/build-tools" \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              -printf '%f\n' |
+            sort -V |
+            tail -n1
+          )"
+
+          echo "ZIPALIGN=$SDK_ROOT/build-tools/$BUILD_TOOLS/zipalign" >> "$GITHUB_ENV"
+          echo "APKSIGNER=$SDK_ROOT/build-tools/$BUILD_TOOLS/apksigner" >> "$GITHUB_ENV"
+
+      - name: Decode donor APK and enable debuggable
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Decode resources so AndroidManifest.xml becomes editable text.
+          # Keep classes.dex untouched.
+          java -jar apktool.jar \
+            d \
+            -f \
+            --no-src \
+            donor.apk \
+            -o decoded
+
+          test -f decoded/AndroidManifest.xml
+          test -f decoded/assets/runtime/runtime.zip
+          test -f decoded/assets/runtime/manifest.json
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          manifest = Path("decoded/AndroidManifest.xml")
+          text = manifest.read_text()
+
+          if 'android:debuggable=' in text:
+              text = re.sub(
+                  r'android:debuggable="(?:true|false)"',
+                  'android:debuggable="true"',
+                  text,
+                  count=1,
+              )
+          else:
+              text = text.replace(
+                  "<application ",
+                  '<application android:debuggable="true" ',
+                  1,
+              )
+
+          if 'android:debuggable="true"' not in text:
+              raise SystemExit("failed to enable android:debuggable=true")
+
+          manifest.write_text(text)
+          print("android:debuggable=true enabled")
+          PY
+
+      - name: Replace runtime core
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import zipfile
+
+          decoded = Path("decoded")
+          candidates = list(Path("core-artifact").rglob("shadps4-arm64"))
+
+          if len(candidates) != 1:
+              raise SystemExit(
+                  f"expected one shadps4-arm64 artifact, got {candidates}"
+              )
+
+          binary = candidates[0].read_bytes()
+          runtime_zip = decoded / "assets/runtime/runtime.zip"
+          runtime_manifest = decoded / "assets/runtime/manifest.json"
+          target = "host/shadps4-arm64-fex"
+          sha = hashlib.sha256(binary).hexdigest()
+          temp = runtime_zip.with_suffix(".new.zip")
+
+          with zipfile.ZipFile(runtime_zip, "r") as zin:
+              with zipfile.ZipFile(temp, "w") as zout:
+                  if target not in zin.namelist():
+                      raise SystemExit(f"{target} missing from donor runtime")
+
+                  for info in zin.infolist():
+                      data = (
+                          binary
+                          if info.filename == target
+                          else zin.read(info.filename)
+                      )
+                      zout.writestr(info, data)
+
+          temp.replace(runtime_zip)
+
+          manifest = json.loads(runtime_manifest.read_text())
+
+          if manifest.get("schemaVersion") != 2:
+              raise SystemExit("unexpected runtime schema version")
+          if manifest.get("protocolVersion") != 1:
+              raise SystemExit("unexpected runtime protocol version")
+
+          entry = next(
+              (
+                  item
+                  for item in manifest.get("files", [])
+                  if item.get("path") == target
+              ),
+              None,
+          )
+
+          if entry is None:
+              raise SystemExit("runtime manifest entry missing")
+
+          entry["size"] = len(binary)
+          entry["sha256"] = sha
+
+          old_version = manifest.get("runtimeVersion", "runtime")
+          manifest["runtimeVersion"] = (
+              f"{old_version}-shadp2p-{sha[:12]}"
+          )
+          runtime_manifest.write_text(
+              json.dumps(manifest, indent=2) + "\n"
+          )
+
+          print("replacement ARM64 core sha256:", sha)
+          print("runtime version:", manifest["runtimeVersion"])
+          PY
+
+      - name: Rebuild, align and sign APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          java -jar apktool.jar \
+            b \
+            decoded \
+            -o unsigned.apk
+
+          keytool \
+            -genkeypair \
+            -noprompt \
+            -keystore test.keystore \
+            -storepass android \
+            -alias androidtestkey \
+            -keypass android \
+            -dname 'CN=Android Test,O=Android,C=US' \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
+
+          if "$ZIPALIGN" -h 2>&1 | grep -q -- '-P'; then
+            "$ZIPALIGN" -P 16 -f -v 4 unsigned.apk aligned.apk
+          else
+            "$ZIPALIGN" -p -f -v 4 unsigned.apk aligned.apk
+          fi
+
+          "$APKSIGNER" sign \
+            --ks test.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out BachataS4-0.1.9-shadp2p-debuggable.apk \
+            aligned.apk
+
+          "$APKSIGNER" verify \
+            --verbose \
+            --print-certs \
+            BachataS4-0.1.9-shadp2p-debuggable.apk
+
+          test "$(
+            stat -c%s BachataS4-0.1.9-shadp2p-debuggable.apk
+          )" -gt 150000000
+
+      - name: Verify packaged shadp2p runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          from io import BytesIO
+          from pathlib import Path
+          import hashlib
+          import json
+          import zipfile
+
+          apk_path = Path("BachataS4-0.1.9-shadp2p-debuggable.apk")
+          target = "host/shadps4-arm64-fex"
+
+          with zipfile.ZipFile(apk_path, "r") as apk:
+              runtime_zip_data = apk.read(
+                  "assets/runtime/runtime.zip"
+              )
+              manifest = json.loads(
+                  apk.read("assets/runtime/manifest.json")
+              )
+
+          with zipfile.ZipFile(BytesIO(runtime_zip_data), "r") as runtime:
+              binary = runtime.read(target)
+
+          sha = hashlib.sha256(binary).hexdigest()
+          entry = next(
+              (
+                  item
+                  for item in manifest.get("files", [])
+                  if item.get("path") == target
+              ),
+              None,
+          )
+
+          if entry is None:
+              raise SystemExit("final APK runtime manifest entry missing")
+
+          if entry.get("size") != len(binary):
+              raise SystemExit("final APK runtime size mismatch")
+
+          if entry.get("sha256") != sha:
+              raise SystemExit("final APK runtime sha256 mismatch")
+
+          if "-shadp2p-" not in manifest.get("runtimeVersion", ""):
+              raise SystemExit("final APK runtime version was not updated")
+
+          if b"TCP connected to" not in binary:
+              raise SystemExit("shadp2p TCP marker missing from final APK")
+
+          if b"Login packet sent for" not in binary:
+              raise SystemExit("shadp2p login marker missing from final APK")
+
+          print("Final APK runtime verified.")
+          print("Embedded ARM64 core sha256:", sha)
+          print("Runtime version:", manifest["runtimeVersion"])
+          PY
+
+      - name: Verify APK is debuggable
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf verify-manifest
+          java -jar apktool.jar \
+            d \
+            -f \
+            --only-manifest \
+            BachataS4-0.1.9-shadp2p-debuggable.apk \
+            -o verify-manifest
+
+          grep -Fq \
+            'android:debuggable="true"' \
+            verify-manifest/AndroidManifest.xml
+
+          echo "Verified: android:debuggable=true"
+
+      - name: Upload finished APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BachataS4-shadp2p-debuggable
+          compression-level: 0
+          retention-days: 7
+          path: BachataS4-0.1.9-shadp2p-debuggable.apk
