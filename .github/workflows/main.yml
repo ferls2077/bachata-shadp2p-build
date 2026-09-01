@@ -588,8 +588,8 @@ jobs:
             exit 1
           fi
 
-          strings "$BIN" | grep -Fq 'TCP connected to'
-          strings "$BIN" | grep -Fq 'Login packet sent for'
+          grep -aFq 'TCP connected to' "$BIN"
+          grep -aFq 'Login packet sent for' "$BIN"
           sha256sum "$BIN"
 
       - name: Upload ARM64 core
