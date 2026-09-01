@@ -1,0 +1,932 @@
+name: Build Bachata shadp2p APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    container:
+      image: debian:trixie
+
+    env:
+      ARM64_SHA: be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+      SHADP2P_SHA: 6e97b404d6f89e7dab58f98c69678b69af9a3c4f
+      PROTOBUF_SHA: 5917ee224a7e47383a78acc129628511fe210dff
+
+    steps:
+      - name: Bootstrap
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl python3 nodejs rsync
+
+      - name: Checkout exact ARM64 core and shadp2p
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          git init core
+          git -C core remote add origin https://github.com/zenithblue-oss/shadps4-arm64.git
+          git -C core fetch --depth=1 --filter=blob:none origin "$ARM64_SHA"
+          git -C core checkout --detach FETCH_HEAD
+          git -C core submodule update --init --recursive --depth 1 --jobs 8
+
+          git init p2p
+          git -C p2p remote add origin https://github.com/Wozzardman/shadp2p.git
+          git -C p2p sparse-checkout init --cone
+          git -C p2p sparse-checkout set \
+            src/core/libraries/np \
+            src/core/libraries/network \
+            src/core/libraries/invitation_dialog \
+            src/core/bloodborne_re.h \
+            src/core/bloodborne_re.cpp \
+            src/imgui/invitation_prompt_layer.h \
+            src/imgui/invitation_prompt_layer.cpp \
+            src/imgui/shadnet_notifications_layer.h \
+            src/imgui/shadnet_notifications_layer.cpp \
+            src/shadnet
+          git -C p2p fetch --depth=1 --filter=blob:none origin "$SHADP2P_SHA"
+          git -C p2p checkout --detach FETCH_HEAD
+
+          cp core/src/core/libraries/np/np_commerce.cpp /tmp/np_commerce.cpp
+          cp core/src/core/libraries/np/np_commerce.h /tmp/np_commerce.h
+          cp core/src/core/libraries/np/np_trophy.cpp /tmp/np_trophy.cpp
+          cp core/src/core/libraries/np/np_trophy.h /tmp/np_trophy.h
+
+          rm -rf core/src/core/libraries/np
+          rm -rf core/src/core/libraries/network
+          rm -rf core/src/shadnet
+
+          cp -a p2p/src/core/libraries/np core/src/core/libraries/
+          cp -a p2p/src/core/libraries/network core/src/core/libraries/
+          cp -a p2p/src/core/libraries/invitation_dialog core/src/core/libraries/
+          cp -a p2p/src/shadnet core/src/
+          cp p2p/src/core/bloodborne_re.h core/src/core/
+          cp p2p/src/core/bloodborne_re.cpp core/src/core/
+          cp p2p/src/imgui/invitation_prompt_layer.h core/src/imgui/
+          cp p2p/src/imgui/invitation_prompt_layer.cpp core/src/imgui/
+          cp p2p/src/imgui/shadnet_notifications_layer.h core/src/imgui/
+          cp p2p/src/imgui/shadnet_notifications_layer.cpp core/src/imgui/
+
+          cp /tmp/np_commerce.cpp core/src/core/libraries/np/
+          cp /tmp/np_commerce.h core/src/core/libraries/np/
+          cp /tmp/np_trophy.cpp core/src/core/libraries/np/
+          cp /tmp/np_trophy.h core/src/core/libraries/np/
+
+          test "$(git -C p2p hash-object src/core/libraries/np/np_handler.cpp)" = \
+            d9ce291fc71731e938c02bebb580e21e5644f088
+
+      - name: Install ARM64 build dependencies
+        shell: bash
+        working-directory: core
+        run: |
+          set -euxo pipefail
+          bash runtime/scripts/install-debian-runtime-deps.sh
+
+      - name: Install pinned protobuf and patch shadNet build
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf core/externals/protobuf
+          git init core/externals/protobuf
+          git -C core/externals/protobuf remote add origin https://github.com/shadexternals/protobuf.git
+          git -C core/externals/protobuf fetch --depth=1 --filter=blob:none origin "$PROTOBUF_SHA"
+          git -C core/externals/protobuf checkout --detach FETCH_HEAD
+          git -C core/externals/protobuf submodule update --init --recursive --depth 1 --jobs 8
+
+          cat > /tmp/patch_shadnet.py <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("core")
+          cmake = root / "CMakeLists.txt"
+          ext_cmake = root / "externals/CMakeLists.txt"
+          arm_script = root / "runtime/scripts/build-shadps4-arm64.sh"
+          settings = root / "src/core/emulator_settings.h"
+          libs_cpp = root / "src/core/libraries/libs.cpp"
+          np_handler = root / "src/core/libraries/np/np_handler.cpp"
+          bloodborne_re = root / "src/core/bloodborne_re.cpp"
+          http_h = root / "src/core/libraries/network/http.h"
+          http_cpp = root / "src/core/libraries/network/http.cpp"
+
+          handler_text = np_handler.read_text()
+
+          for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE"):
+              handler_text = handler_text.replace(
+                  f"LOG_{level}(NpHandler,",
+                  f"LOG_{level}(Lib_NpManager,"
+              )
+
+          function_start = "std::string NpHandler::GetNpCommId(s32 service_label) const {"
+          next_function = "\ns32 NpHandler::RecordScore"
+          start = handler_text.find(function_start)
+          end = handler_text.find(next_function, start)
+
+          if start == -1 or end == -1:
+              raise SystemExit("GetNpCommId function block not found")
+
+          replacement = r'''std::string NpHandler::GetNpCommId(s32 service_label) const {
+              (void)service_label;
+              return std::string(12, '\0');
+          }
+          '''
+
+          handler_text = handler_text[:start] + replacement + handler_text[end:]
+
+          if "GetNpCommIds()" in handler_text:
+              raise SystemExit("GetNpCommIds compatibility patch failed")
+
+          np_handler.write_text(handler_text)
+
+          # ARM64/FEX compatibility for libSceHttp epoll handles.
+          #
+          # shadp2p stores a small opaque integer ID in OrbisHttpEpollHandle but
+          # declares the type as void*. Bachata's FEX HLE adapter treats pointer
+          # arguments as guest memory and rejects small values (1, 2, 3, ...)
+          # with EFAULT before sceHttpWaitRequest can execute.
+          #
+          # Keep the ABI 64-bit wide but expose the opaque handle as u64 so FEX
+          # marshals it as a scalar instead of validating it as a guest pointer.
+          http_h_text = http_h.read_text()
+          old_handle_type = "using OrbisHttpEpollHandle = void*;"
+          if old_handle_type not in http_h_text:
+              raise SystemExit("OrbisHttpEpollHandle type marker not found")
+          http_h_text = http_h_text.replace(
+              old_handle_type,
+              "using OrbisHttpEpollHandle = u64;",
+              1
+          )
+          http_h.write_text(http_h_text)
+
+          http_text = http_cpp.read_text()
+
+          old_codec = '''static OrbisHttpEpollHandle EncodeEpollHandle(int id) {
+              return reinterpret_cast<OrbisHttpEpollHandle>(static_cast<intptr_t>(id));
+          }
+
+          static int DecodeEpollHandle(OrbisHttpEpollHandle eh) {
+              return static_cast<int>(reinterpret_cast<intptr_t>(eh));
+          }'''
+
+          new_codec = '''static OrbisHttpEpollHandle EncodeEpollHandle(int id) {
+              return static_cast<OrbisHttpEpollHandle>(id);
+          }
+
+          static int DecodeEpollHandle(OrbisHttpEpollHandle eh) {
+              return static_cast<int>(eh);
+          }'''
+
+          if old_codec not in http_text:
+              raise SystemExit("HTTP epoll encode/decode block not found")
+          http_text = http_text.replace(old_codec, new_codec, 1)
+
+          def patch_function(text, name, old, new):
+              start = text.find(f"int PS4_SYSV_ABI {name}(")
+              if start == -1:
+                  raise SystemExit(f"{name} function not found")
+              end = text.find("\nint PS4_SYSV_ABI ", start + 1)
+              if end == -1:
+                  end = len(text)
+              block = text[start:end]
+              if old not in block:
+                  raise SystemExit(f"{old!r} not found inside {name}")
+              block = block.replace(old, new)
+              return text[:start] + block + text[end:]
+
+          # Scalar epoll handles must no longer be formatted as pointers.
+          for name in (
+              "sceHttpWaitRequest",
+              "sceHttpDestroyEpoll",
+              "sceHttpSetEpoll",
+              "sceHttpAbortWaitRequest",
+          ):
+              http_text = patch_function(http_text, name, "fmt::ptr(eh)", "eh")
+
+          # sceHttpCreateEpoll still receives a real output pointer (eh), but *eh
+          # is the scalar handle after assignment.
+          http_text = patch_function(
+              http_text,
+              "sceHttpCreateEpoll",
+              "fmt::ptr(*eh)",
+              "*eh"
+          )
+
+          # Guard against accidentally leaving scalar pointer formatting behind.
+          for name in (
+              "sceHttpWaitRequest",
+              "sceHttpDestroyEpoll",
+              "sceHttpSetEpoll",
+              "sceHttpAbortWaitRequest",
+          ):
+              start = http_text.find(f"int PS4_SYSV_ABI {name}(")
+              end = http_text.find("\nint PS4_SYSV_ABI ", start + 1)
+              if end == -1:
+                  end = len(http_text)
+              if "fmt::ptr(eh)" in http_text[start:end]:
+                  raise SystemExit(f"scalar fmt::ptr(eh) remains in {name}")
+
+          http_cpp.write_text(http_text)
+
+          # Bachata ARM64 does not have the newer ShadNet log class.
+          # Patch the two shadNet sources that use it.
+          for name in ("client.cpp", "server_probe.cpp"):
+              path = root / "src/shadnet" / name
+              shadnet_text = path.read_text()
+
+              for level in ("INFO", "WARNING", "ERROR", "DEBUG", "TRACE", "CRITICAL"):
+                  shadnet_text = shadnet_text.replace(
+                      f"LOG_{level}(ShadNet,",
+                      f"LOG_{level}(Lib_NpManager,"
+                  )
+
+              path.write_text(shadnet_text)
+
+          # Bachata ARM64 compatibility for shadp2p-only invitation/notification UI.
+          # Keep the networking/session code, but make the two unsupported overlay layers no-op.
+          invitation_dialog = root / "src/core/libraries/invitation_dialog/invitation_dialog.cpp"
+          invitation_text = invitation_dialog.read_text()
+          invitation_text = invitation_text.replace("Lib_InvitationDialog", "Lib_NpManager")
+          invitation_dialog.write_text(invitation_text)
+
+          (root / "src/imgui/shadnet_notifications_layer.cpp").write_text(r'''// Bachata ARM64: no-op shadNet notification overlay
+          #include "imgui/shadnet_notifications_layer.h"
+
+          namespace ImGui::ShadNetNotify {
+
+          KindDisplay DisplayOf(Kind) {
+              KindDisplay out{};
+              out.tag = "";
+              return out;
+          }
+
+          void Push(Kind, std::string) {}
+          std::vector<HistoryEntry> GetHistory() { return {}; }
+          void ClearHistory() {}
+          std::size_t UnreadCount() { return 0; }
+          void MarkRead() {}
+          void Register() {}
+          void Unregister() {}
+
+          } // namespace ImGui::ShadNetNotify
+          ''')
+
+          (root / "src/imgui/invitation_prompt_layer.cpp").write_text(r'''// Bachata ARM64: no-op invitation prompt overlay
+          #include "imgui/invitation_prompt_layer.h"
+
+          namespace ImGui::InvitationPrompt {
+
+          void Push(s32, std::string, std::string, std::string) {}
+          void Dismiss(const std::string&) {}
+          void Register() {}
+          void Unregister() {}
+
+          } // namespace ImGui::InvitationPrompt
+          ''')
+
+          # The full upstream Bloodborne RE implementation needs newer debugger/register
+          # APIs that are not present in the Bachata ARM64 base. Keep only the API
+          # needed by the shadp2p HTTP/matching path and no-op the unsupported tracing.
+          bloodborne_re.write_text(r'''// ARM64 Bachata compatibility implementation
+          #include "core/bloodborne_re.h"
+
+          namespace Core::Bloodborne {
+
+          namespace {
+          std::optional<std::string> host_placement;
+          }
+
+          std::optional<std::string> GetSeamlessHostPlacementHeader() {
+              return host_placement;
+          }
+
+          bool SetSeamlessHostPlacementHeader(std::string_view value) {
+              host_placement = std::string(value);
+              return true;
+          }
+
+          void ClearSeamlessHostPlacementHeader() {
+              host_placement.reset();
+          }
+
+          void TraceMatching2LeaveRoom(std::uintptr_t return_address, std::uint64_t room_id) {
+              (void)return_address;
+              (void)room_id;
+          }
+
+          void InstallSeamlessCoopPatches() {
+          }
+
+          void InstallReverseEngineeringTrace() {
+          }
+
+          } // namespace Core::Bloodborne
+          ''')
+
+          text = cmake.read_text()
+
+          if "# shadNet protobuf generation (Android ARM64)" not in text:
+              marker = '''set(EMULATOR src/emulator.cpp
+                       src/emulator.h
+                       src/sdl_window.h
+                       src/sdl_window.cpp
+          )
+          '''
+              if marker not in text:
+                  raise SystemExit("EMULATOR block not found")
+
+              block = marker + r'''
+
+          # shadNet protobuf generation (Android ARM64)
+          set(SHADNET_PROTO_PREGENERATED_DIR "" CACHE PATH
+              "Directory containing pre-generated shadnet.pb.cc and shadnet.pb.h")
+
+          if (SHADNET_PROTO_PREGENERATED_DIR)
+              set(SHADNET_PROTO_OUT "${SHADNET_PROTO_PREGENERATED_DIR}")
+              if (NOT EXISTS "${SHADNET_PROTO_OUT}/shadnet.pb.cc" OR
+                  NOT EXISTS "${SHADNET_PROTO_OUT}/shadnet.pb.h")
+                  message(FATAL_ERROR "Missing pre-generated shadNet protobuf files")
+              endif()
+          else()
+              set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
+              file(MAKE_DIRECTORY "${SHADNET_PROTO_OUT}")
+              add_custom_command(
+                  OUTPUT
+                      "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
+                      "${SHADNET_PROTO_OUT}/shadnet.pb.h"
+                  COMMAND protobuf::protoc
+                      "--proto_path=${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet"
+                      "--cpp_out=${SHADNET_PROTO_OUT}"
+                      "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet/shadnet.proto"
+                  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet/shadnet.proto"
+                  VERBATIM
+              )
+          endif()
+
+          set(SHADNET
+              src/shadnet/client.cpp
+              src/shadnet/client.h
+              src/shadnet/server_probe.cpp
+              src/shadnet/server_probe.h
+              src/core/bloodborne_re.cpp
+              src/core/bloodborne_re.h
+              src/core/libraries/invitation_dialog/invitation_dialog.cpp
+              src/core/libraries/invitation_dialog/invitation_dialog.h
+              src/core/libraries/invitation_dialog/invitation_dialog_ui.cpp
+              src/core/libraries/invitation_dialog/invitation_dialog_ui.h
+              src/imgui/invitation_prompt_layer.cpp
+              src/imgui/invitation_prompt_layer.h
+              src/imgui/shadnet_notifications_layer.cpp
+              src/imgui/shadnet_notifications_layer.h
+              "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
+          )
+          '''
+              text = text.replace(marker, block, 1)
+
+          if "    ${SHADNET}\n" not in text:
+              marker = '''    ${VIDEO_CORE}
+              ${EMULATOR}
+              src/main.cpp
+          '''
+              if marker not in text:
+                  raise SystemExit("shadps4 source-list block not found")
+              text = text.replace(
+                  marker,
+                  '''    ${VIDEO_CORE}
+              ${EMULATOR}
+              ${SHADNET}
+              src/main.cpp
+          ''',
+                  1
+              )
+
+          if "target_link_libraries(shadps4 PRIVATE libprotobuf)" not in text:
+              marker = "target_link_libraries(shadps4 PRIVATE Freetype::Freetype)\n"
+              if marker not in text:
+                  raise SystemExit("Freetype link marker not found")
+              text = text.replace(
+                  marker,
+                  marker
+                  + '''target_link_libraries(shadps4 PRIVATE libprotobuf)
+          target_include_directories(shadps4 PRIVATE "${SHADNET_PROTO_OUT}")
+          ''',
+                  1
+              )
+
+          old = "src/core/libraries/np/np_matching2.cpp"
+          if old not in text:
+              raise SystemExit("old np_matching2.cpp CMake entry not found")
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_matching2/np_matching2.cpp
+                src/core/libraries/np/np_matching2/np_matching2_internal.cpp
+                src/core/libraries/np/np_matching2/np_matching2_mm.cpp
+                src/core/libraries/np/np_matching2/np_matching2_signaling.cpp''',
+              1
+          )
+
+          old = "src/core/libraries/np/np_matching2.h"
+          if old not in text:
+              raise SystemExit("old np_matching2.h CMake entry not found")
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_matching2/np_matching2.h
+                src/core/libraries/np/np_matching2/np_matching2_internal.h
+                src/core/libraries/np/np_matching2/np_matching2_mm.h
+                src/core/libraries/np/np_matching2/np_matching2_signaling.h''',
+              1
+          )
+
+          old = "src/core/libraries/np/np_web_api2.cpp"
+          if old not in text:
+              raise SystemExit("old np_web_api2.cpp CMake entry not found")
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_web_api2/np_web_api2.cpp
+                src/core/libraries/np/np_web_api2/np_web_api2_context.cpp
+                src/core/libraries/np/np_web_api2/np_web_api2_internal.cpp
+                src/core/libraries/np/np_web_api2/np_web_api2_push_event.cpp''',
+              1
+          )
+
+          old = "src/core/libraries/np/np_web_api2.h"
+          if old not in text:
+              raise SystemExit("old np_web_api2.h CMake entry not found")
+          text = text.replace(
+              old,
+              '''src/core/libraries/np/np_web_api2/np_web_api2.h
+                src/core/libraries/np/np_web_api2/np_web_api2_context.h
+                src/core/libraries/np/np_web_api2/np_web_api2_internal.h
+                src/core/libraries/np/np_web_api2/np_web_api2_push_event.h''',
+              1
+          )
+
+          cmake.write_text(text)
+
+          libs_text = libs_cpp.read_text()
+
+          replacements = {
+              '#include "core/libraries/np/np_matching2.h"':
+                  '#include "core/libraries/np/np_matching2/np_matching2.h"',
+              '#include "core/libraries/np/np_web_api2.h"':
+                  '#include "core/libraries/np/np_web_api2/np_web_api2.h"',
+          }
+
+          for old, new in replacements.items():
+              if old not in libs_text:
+                  raise SystemExit(f"old libs.cpp include not found: {old}")
+              libs_text = libs_text.replace(old, new, 1)
+
+          libs_cpp.write_text(libs_text)
+
+          ext = ext_cmake.read_text()
+
+          if "# protobuf (required by shadNet)" not in ext:
+              marker = "# macOS Vulkan driver\n"
+              if marker not in ext:
+                  raise SystemExit("externals insertion marker not found")
+
+              block = r'''# protobuf (required by shadNet)
+          set(protobuf_BUILD_TESTS OFF CACHE INTERNAL "")
+          set(protobuf_BUILD_EXAMPLES OFF CACHE INTERNAL "")
+
+          if (CMAKE_CROSSCOMPILING AND SHADNET_PROTO_PREGENERATED_DIR)
+              set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE INTERNAL "" FORCE)
+          else()
+              set(protobuf_BUILD_PROTOC_BINARIES ON CACHE INTERNAL "" FORCE)
+          endif()
+
+          set(protobuf_INSTALL OFF CACHE INTERNAL "")
+          set(protobuf_WITH_ZLIB OFF CACHE INTERNAL "")
+          set(protobuf_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
+          set(protobuf_FORCE_FETCH_DEPENDENCIES ON CACHE INTERNAL "")
+          add_subdirectory(protobuf EXCLUDE_FROM_ALL)
+
+          '''
+              ext = ext.replace(marker, block + marker, 1)
+
+          ext_cmake.write_text(ext)
+
+          arm = arm_script.read_text()
+
+          if 'proto_dir="$project_root/runtime/build/shadps4-x86_64/shadnet_proto_gen"' not in arm:
+              marker = 'font_embed_source="$project_root/externals/dear_imgui/misc/fonts/binary_to_compressed_c.cpp"\n'
+              if marker not in arm:
+                  raise SystemExit("ARM64 script header marker not found")
+
+              arm = arm.replace(
+                  marker,
+                  marker
+                  + r'''proto_dir="$project_root/runtime/build/shadps4-x86_64/shadnet_proto_gen"
+
+          for generated in shadnet.pb.cc shadnet.pb.h; do
+            test -f "$proto_dir/$generated" || {
+              echo "Missing $proto_dir/$generated" >&2
+              exit 1
+            }
+          done
+          ''',
+                  1
+              )
+
+          if '-DSHADNET_PROTO_PREGENERATED_DIR="$proto_dir"' not in arm:
+              marker = '  -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \\\n'
+              if marker not in arm:
+                  raise SystemExit("ARM64 CMake option marker not found")
+              arm = arm.replace(
+                  marker,
+                  marker + '  -DSHADNET_PROTO_PREGENERATED_DIR="$proto_dir" \\\n',
+                  1
+              )
+
+          arm_script.write_text(arm)
+          arm_script.chmod(0o755)
+
+          s = settings.read_text()
+
+          if "#include <atomic>" not in s:
+              s = s.replace(
+                  "#include <filesystem>",
+                  "#include <atomic>\n#include <filesystem>",
+                  1
+              )
+
+          if "Setting<std::string> shadnet_webapi_server" not in s:
+              s = s.replace(
+                  '    Setting<std::string> shadnet_server{""};\n',
+                  '    Setting<std::string> shadnet_server{""};\n'
+                  '    Setting<std::string> shadnet_webapi_server{"http://srv.shadps4.net:31315"};\n',
+                  1
+              )
+              s = s.replace(
+                  "big_picture_scale, shadnet_server, signaling_addr,\n",
+                  "big_picture_scale, shadnet_server, shadnet_webapi_server, signaling_addr,\n",
+                  1
+              )
+
+          if "m_shadnet_session_disabled" not in s:
+              s = s.replace(
+                  "    ConfigMode m_configMode{ConfigMode::Default};\n\n    bool m_loaded{false};",
+                  "    ConfigMode m_configMode{ConfigMode::Default};\n\n"
+                  "    std::atomic<bool> m_shadnet_session_disabled{false};\n\n"
+                  "    bool m_loaded{false};",
+                  1
+              )
+
+          old = "    SETTING_FORWARD_BOOL(m_general, ShadNetEnabled, shad_net_enabled)"
+          if old in s:
+              new = '''    bool IsShadNetEnabled() const {
+                  return m_general.shad_net_enabled.get(m_configMode) &&
+                         !m_shadnet_session_disabled.load(std::memory_order_relaxed);
+              }
+
+              void SetShadNetEnabled(bool v, bool specific = false) {
+                  m_general.shad_net_enabled.set(v, specific);
+              }
+
+              bool IsShadNetEnabledSetting() const {
+                  return m_general.shad_net_enabled.get(m_configMode);
+              }
+
+              void SetShadNetSessionDisabled(bool v) {
+                  m_shadnet_session_disabled.store(v, std::memory_order_relaxed);
+              }
+
+              bool IsShadNetSessionDisabled() const {
+                  return m_shadnet_session_disabled.load(std::memory_order_relaxed);
+              }'''
+              s = s.replace(old, new, 1)
+
+          if "SETTING_FORWARD(m_general, ShadNetWebApiServer, shadnet_webapi_server)" not in s:
+              marker = "    SETTING_FORWARD(m_general, ShadNetServer, shadnet_server)\n"
+              if marker not in s:
+                  raise SystemExit("ShadNetServer accessor marker not found")
+              s = s.replace(
+                  marker,
+                  marker
+                  + "    SETTING_FORWARD(m_general, ShadNetWebApiServer, shadnet_webapi_server)\n",
+                  1
+              )
+
+          settings.write_text(s)
+
+          print("shadp2p ARM64 compatibility patch applied")
+          PY
+
+          python3 /tmp/patch_shadnet.py
+
+      - name: Build matching host protoc
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cmake \
+            -S core/externals/protobuf \
+            -B /tmp/protobuf-host \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_EXAMPLES=OFF \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_INSTALL=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF \
+            -Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON
+
+          cmake --build /tmp/protobuf-host --target protoc --parallel 2
+
+          PROTOC="$(
+            find -L /tmp/protobuf-host \
+              -type f \
+              -name protoc \
+              -perm -111 |
+            head -n1
+          )"
+
+          test -x "$PROTOC"
+          mkdir -p core/runtime/build/shadps4-x86_64/shadnet_proto_gen
+
+          "$PROTOC" \
+            --proto_path=core/src/shadnet \
+            --cpp_out=core/runtime/build/shadps4-x86_64/shadnet_proto_gen \
+            core/src/shadnet/shadnet.proto
+
+          test -s core/runtime/build/shadps4-x86_64/shadnet_proto_gen/shadnet.pb.cc
+          test -s core/runtime/build/shadps4-x86_64/shadnet_proto_gen/shadnet.pb.h
+
+      - name: Build shadp2p ARM64 core
+        shell: bash
+        working-directory: core
+        run: |
+          set -euxo pipefail
+
+          bash runtime/scripts/build-shadps4-arm64.sh
+
+          BIN=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -x "$BIN"
+          readelf -h "$BIN" | grep -q 'AArch64'
+          readelf -l "$BIN" | grep -q '/lib/ld-linux-aarch64.so.1'
+
+          if readelf -d "$BIN" | grep -q 'libprotobuf'; then
+            echo "ERROR: protobuf must be statically linked" >&2
+            exit 1
+          fi
+
+          grep -aFq 'TCP connected to' "$BIN"
+          grep -aFq 'Login packet sent for' "$BIN"
+          sha256sum "$BIN"
+
+      - name: Upload ARM64 core
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadp2p-arm64-core
+          compression-level: 0
+          retention-days: 7
+          path: |
+            core/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+            core/runtime/build/shadps4-arm64-stage/needed.txt
+
+  package-apk:
+    needs: build-core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      DONOR_APK: https://github.com/JICA98/Bachata-S4/releases/download/v0.1.9/bachatas4-0.1.9-release.apk
+      DONOR_SHA256: ee6514f4148e3c6aa88ca0ef0ae1d41eaad464ca2d6cd1057d1c425504aa2ef2
+
+    steps:
+      - name: Download ARM64 core
+        uses: actions/download-artifact@v4
+        with:
+          name: shadp2p-arm64-core
+          path: core-artifact
+
+      - name: Prepare APK tools and donor
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends default-jre-headless
+
+          curl -fL \
+            --retry 5 \
+            --retry-delay 2 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar \
+            -o apktool.jar
+
+          echo \
+            'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423  apktool.jar' |
+            sha256sum -c -
+
+          curl -fL \
+            --retry 5 \
+            --retry-delay 2 \
+            "$DONOR_APK" \
+            -o donor.apk
+
+          echo "$DONOR_SHA256  donor.apk" | sha256sum -c -
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -d "$SDK_ROOT/build-tools"
+
+          BUILD_TOOLS="$(
+            find "$SDK_ROOT/build-tools" \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              -printf '%f\n' |
+            sort -V |
+            tail -n1
+          )"
+
+          echo "ZIPALIGN=$SDK_ROOT/build-tools/$BUILD_TOOLS/zipalign" >> "$GITHUB_ENV"
+          echo "APKSIGNER=$SDK_ROOT/build-tools/$BUILD_TOOLS/apksigner" >> "$GITHUB_ENV"
+
+      - name: Decode donor APK and enable debuggable
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Decode resources so AndroidManifest.xml is editable.
+          # Keep classes.dex untouched.
+          java -jar apktool.jar \
+            d \
+            -f \
+            --no-src \
+            donor.apk \
+            -o decoded
+
+          test -f decoded/AndroidManifest.xml
+          test -f decoded/assets/runtime/runtime.zip
+          test -f decoded/assets/runtime/manifest.json
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          manifest = Path("decoded/AndroidManifest.xml")
+          manifest_text = manifest.read_text()
+
+          if 'android:debuggable=' in manifest_text:
+              manifest_text = re.sub(
+                  r'android:debuggable="(?:true|false)"',
+                  'android:debuggable="true"',
+                  manifest_text,
+                  count=1,
+              )
+          else:
+              manifest_text = manifest_text.replace(
+                  "<application ",
+                  '<application android:debuggable="true" ',
+                  1,
+              )
+
+          if 'android:debuggable="true"' not in manifest_text:
+              raise SystemExit("failed to enable android:debuggable=true")
+
+          manifest.write_text(manifest_text)
+          print("android:debuggable=true enabled")
+          PY
+
+      - name: Replace runtime core
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import zipfile
+
+          decoded = Path("decoded")
+          candidates = list(Path("core-artifact").rglob("shadps4-arm64"))
+
+          if len(candidates) != 1:
+              raise SystemExit(f"expected one shadps4-arm64 artifact, got {candidates}")
+
+          binary = candidates[0].read_bytes()
+          runtime_zip = decoded / "assets/runtime/runtime.zip"
+          runtime_manifest = decoded / "assets/runtime/manifest.json"
+          target = "host/shadps4-arm64-fex"
+          sha = hashlib.sha256(binary).hexdigest()
+          temp = runtime_zip.with_suffix(".new.zip")
+
+          with zipfile.ZipFile(runtime_zip, "r") as zin:
+              with zipfile.ZipFile(temp, "w") as zout:
+                  if target not in zin.namelist():
+                      raise SystemExit(f"{target} missing from donor runtime")
+
+                  for info in zin.infolist():
+                      data = binary if info.filename == target else zin.read(info.filename)
+                      zout.writestr(info, data)
+
+          temp.replace(runtime_zip)
+
+          manifest = json.loads(runtime_manifest.read_text())
+
+          if manifest.get("schemaVersion") != 2:
+              raise SystemExit("unexpected runtime schema version")
+          if manifest.get("protocolVersion") != 1:
+              raise SystemExit("unexpected runtime protocol version")
+
+          entry = next(
+              (item for item in manifest.get("files", []) if item.get("path") == target),
+              None
+          )
+
+          if entry is None:
+              raise SystemExit("runtime manifest entry missing")
+
+          entry["size"] = len(binary)
+          entry["sha256"] = sha
+
+          old_version = manifest.get("runtimeVersion", "runtime")
+          manifest["runtimeVersion"] = f"{old_version}-shadp2p-{sha[:12]}"
+          runtime_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+          print("replacement ARM64 core sha256:", sha)
+          print("runtime version:", manifest["runtimeVersion"])
+          PY
+
+      - name: Rebuild, align and sign APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          java -jar apktool.jar \
+            b \
+            decoded \
+            -o unsigned.apk
+
+          keytool \
+            -genkeypair \
+            -noprompt \
+            -keystore test.keystore \
+            -storepass android \
+            -alias androidtestkey \
+            -keypass android \
+            -dname 'CN=Android Test,O=Android,C=US' \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
+
+          if "$ZIPALIGN" -h 2>&1 | grep -q -- '-P'; then
+            "$ZIPALIGN" -P 16 -f -v 4 unsigned.apk aligned.apk
+          else
+            "$ZIPALIGN" -p -f -v 4 unsigned.apk aligned.apk
+          fi
+
+          "$APKSIGNER" sign \
+            --ks test.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out BachataS4-0.1.9-shadp2p-test.apk \
+            aligned.apk
+
+          "$APKSIGNER" verify \
+            --verbose \
+            --print-certs \
+            BachataS4-0.1.9-shadp2p-test.apk
+
+          test "$(stat -c%s BachataS4-0.1.9-shadp2p-test.apk)" -gt 150000000
+
+           
+
+      - name: Verify APK is debuggable
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf verify-manifest
+          java -jar apktool.jar \
+            d \
+            -f \
+            --only-manifest \
+            BachataS4-0.1.9-shadp2p-test.apk \
+            -o verify-manifest
+
+          grep -Fq \
+            'android:debuggable="true"' \
+            verify-manifest/AndroidManifest.xml
+
+          echo "Verified: android:debuggable=true"
+
+      - name: Upload finished APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BachataS4-shadp2p-test
+          compression-level: 0
+          retention-days: 7
+          path: BachataS4-0.1.9-shadp2p-test.apk
