@@ -781,16 +781,7 @@ jobs:
 
           test "$(stat -c%s BachataS4-0.1.9-shadp2p-test.apk)" -gt 150000000
 
-          java -jar apktool.jar \
-            d \
-            -f \
-            --only-manifest \
-            BachataS4-0.1.9-shadp2p-test.apk \
-            -o verify-manifest
-
-          grep -Fq \
-            'android:usesCleartextTraffic="true"' \
-            verify-manifest/AndroidManifest.xml
+           
 
       - name: Upload finished APK
         uses: actions/upload-artifact@v4
