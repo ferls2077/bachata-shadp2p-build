@@ -242,7 +242,7 @@ jobs:
           )
           new_set_epoll_log = (
               'LOG_INFO(Lib_Http, "called id={}, eh={}, userArg=0x{:x}", id, eh, userArg);\n'
-              '    void* const user_arg_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(userArg));'
+              '    void* const user_arg_ptr = reinterpret_cast<void*>(userArg);'
           )
           if old_set_epoll_log not in set_epoll_block:
               raise SystemExit("sceHttpSetEpoll entry log marker not found")
@@ -268,10 +268,11 @@ jobs:
           )
 
           # Scalar epoll handles must no longer be formatted as pointers.
+          # sceHttpSetEpoll was already rewritten above together with userArg,
+          # so do not try to patch fmt::ptr(eh) in it a second time.
           for name in (
               "sceHttpWaitRequest",
               "sceHttpDestroyEpoll",
-              "sceHttpSetEpoll",
               "sceHttpAbortWaitRequest",
           ):
               http_text = patch_function(http_text, name, "fmt::ptr(eh)", "eh")
@@ -749,12 +750,12 @@ jobs:
 
           # Verify the FEX-facing sceHttpSetEpoll ABI really made it into the binary.
           # Eimm = (int, unsigned long/u64, unsigned long/u64).
-          if ! strings "$BIN" | grep -Fq 'sceHttpSetEpollEimm'; then
+          if ! grep -aFq 'sceHttpSetEpollEimm' "$BIN"; then
             echo "ERROR: sceHttpSetEpoll scalar userArg ABI not present" >&2
             strings "$BIN" | grep -F 'sceHttpSetEpollE' || true
             exit 1
           fi
-          if strings "$BIN" | grep -Fq 'sceHttpSetEpollEimPv'; then
+          if grep -aFq 'sceHttpSetEpollEimPv' "$BIN"; then
             echo "ERROR: old sceHttpSetEpoll void* userArg ABI is still present" >&2
             exit 1
           fi
