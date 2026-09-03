@@ -166,6 +166,21 @@ jobs:
               "using OrbisHttpEpollHandle = u64;",
               1
           )
+
+          # sceHttpSetEpoll's userArg is an opaque guest value, not memory that
+          # the HLE bridge should dereference. Expose it as a scalar at the FEX
+          # boundary, then convert it back to void* inside the implementation.
+          old_set_epoll_decl = (
+              "int PS4_SYSV_ABI sceHttpSetEpoll(int id, OrbisHttpEpollHandle eh, void* userArg);"
+          )
+          new_set_epoll_decl = (
+              "int PS4_SYSV_ABI sceHttpSetEpoll(int id, OrbisHttpEpollHandle eh, u64 userArg);"
+          )
+          if old_set_epoll_decl not in http_h_text:
+              raise SystemExit("sceHttpSetEpoll declaration marker not found")
+          http_h_text = http_h_text.replace(
+              old_set_epoll_decl, new_set_epoll_decl, 1
+          )
           http_h.write_text(http_h_text)
 
           http_text = http_cpp.read_text()
@@ -203,11 +218,61 @@ jobs:
               block = block.replace(old, new)
               return text[:start] + block + text[end:]
 
+          # ARM64/FEX: sceHttpSetEpoll userArg is opaque. Keeping it as void*
+          # makes the typed HLE adapter validate it as guest memory and reject
+          # small opaque values with EFAULT (14) before the function executes.
+          old_set_epoll_sig = (
+              "int PS4_SYSV_ABI sceHttpSetEpoll(int id, OrbisHttpEpollHandle eh, void* userArg) {"
+          )
+          new_set_epoll_sig = (
+              "int PS4_SYSV_ABI sceHttpSetEpoll(int id, OrbisHttpEpollHandle eh, u64 userArg) {"
+          )
+          if old_set_epoll_sig not in http_text:
+              raise SystemExit("sceHttpSetEpoll definition marker not found")
+          http_text = http_text.replace(old_set_epoll_sig, new_set_epoll_sig, 1)
+
+          set_epoll_start = http_text.find(new_set_epoll_sig)
+          set_epoll_end = http_text.find("\nint PS4_SYSV_ABI ", set_epoll_start + 1)
+          if set_epoll_end == -1:
+              set_epoll_end = len(http_text)
+          set_epoll_block = http_text[set_epoll_start:set_epoll_end]
+
+          old_set_epoll_log = (
+              'LOG_INFO(Lib_Http, "called id={}, eh={}, userArg={}", id, fmt::ptr(eh), fmt::ptr(userArg));'
+          )
+          new_set_epoll_log = (
+              'LOG_INFO(Lib_Http, "called id={}, eh={}, userArg=0x{:x}", id, eh, userArg);\n'
+              '    void* const user_arg_ptr = reinterpret_cast<void*>(userArg);'
+          )
+          if old_set_epoll_log not in set_epoll_block:
+              raise SystemExit("sceHttpSetEpoll entry log marker not found")
+          set_epoll_block = set_epoll_block.replace(
+              old_set_epoll_log, new_set_epoll_log, 1
+          )
+          set_epoll_block = set_epoll_block.replace(
+              "*target_user_arg = userArg;",
+              "*target_user_arg = user_arg_ptr;",
+              1
+          )
+          set_epoll_block = set_epoll_block.replace(
+              "fmt::ptr(userArg),\n             level, id);",
+              "fmt::ptr(user_arg_ptr),\n             level, id);",
+              1
+          )
+          if "*target_user_arg = user_arg_ptr;" not in set_epoll_block:
+              raise SystemExit("sceHttpSetEpoll opaque userArg storage patch failed")
+          if "fmt::ptr(userArg)" in set_epoll_block:
+              raise SystemExit("sceHttpSetEpoll still formats scalar userArg as a pointer")
+          http_text = (
+              http_text[:set_epoll_start] + set_epoll_block + http_text[set_epoll_end:]
+          )
+
           # Scalar epoll handles must no longer be formatted as pointers.
+          # sceHttpSetEpoll was already rewritten above together with userArg,
+          # so do not try to patch fmt::ptr(eh) in it a second time.
           for name in (
               "sceHttpWaitRequest",
               "sceHttpDestroyEpoll",
-              "sceHttpSetEpoll",
               "sceHttpAbortWaitRequest",
           ):
               http_text = patch_function(http_text, name, "fmt::ptr(eh)", "eh")
@@ -682,6 +747,19 @@ jobs:
 
           grep -aFq 'TCP connected to' "$BIN"
           grep -aFq 'Login packet sent for' "$BIN"
+
+          # Verify the FEX-facing sceHttpSetEpoll ABI really made it into the binary.
+          # Eimm = (int, unsigned long/u64, unsigned long/u64).
+          if ! grep -aFq 'sceHttpSetEpollEimm' "$BIN"; then
+            echo "ERROR: sceHttpSetEpoll scalar userArg ABI not present" >&2
+            strings "$BIN" | grep -F 'sceHttpSetEpollE' || true
+            exit 1
+          fi
+          if grep -aFq 'sceHttpSetEpollEimPv' "$BIN"; then
+            echo "ERROR: old sceHttpSetEpoll void* userArg ABI is still present" >&2
+            exit 1
+          fi
+
           sha256sum "$BIN"
 
       - name: Upload ARM64 core
