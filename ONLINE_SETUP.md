@@ -461,6 +461,8 @@ General online functions can still work while the final co-op connection fails.
 
 ### `You are not connected to PSN`
 
+that's known issue and just close the emu and reopen it and it will be gone but in case it's not
+
 Check:
 
 - Tailscale is connected
