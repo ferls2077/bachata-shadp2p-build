@@ -11,12 +11,21 @@ jobs:
 
     steps:
       - name: Checkout PR42 source
+        uses: actions/checkout@v4
+        with:
+          repository: cmh1448/OptiScaler_DLSSNR
+          ref: fa78de5c23077e3481708245bd6cda819c5f264c
+          path: src
+          fetch-depth: 1
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify exact PR42 commit
         shell: pwsh
         run: |
-          git clone https://github.com/cmh1448/OptiScaler_DLSSNR.git src
-          git -C src checkout fa78de5c23077e3481708245bd6cda819c5f264c
-          git -C src submodule update --init --recursive
-          git -C src rev-parse HEAD
+          $sha = git -C src rev-parse HEAD
+          Write-Host "Checked out $sha"
+          if ($sha -ne "fa78de5c23077e3481708245bd6cda819c5f264c") { throw "Wrong commit checked out" }
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
