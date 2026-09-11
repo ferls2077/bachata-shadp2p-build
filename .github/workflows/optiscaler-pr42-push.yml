@@ -8,37 +8,38 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - name: Checkout PR42 source
         shell: pwsh
         run: |
-          git clone --recursive https://github.com/cmh1448/OptiScaler_DLSSNR.git src
+          git clone https://github.com/cmh1448/OptiScaler_DLSSNR.git src
           git -C src checkout fa78de5c23077e3481708245bd6cda819c5f264c
           git -C src submodule update --init --recursive
+          git -C src rev-parse HEAD
 
-      - name: Configure
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build DLSS NR forwarder
         shell: pwsh
-        run: cmake -S src -B src/build -A x64 -DCMAKE_BUILD_TYPE=Release
+        run: msbuild src\OptiScaler\dlssnr\forwarder\dlssnr_forwarder.vcxproj /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
-      - name: Build Release
+      - name: Build OptiScaler Release x64
         shell: pwsh
-        run: cmake --build src/build --config Release --parallel
+        run: msbuild src\OptiScaler.sln /m /p:Configuration=Release /p:Platform=x64 /verbosity:minimal
 
-      - name: Package release
+      - name: Package official release layout
         shell: pwsh
         run: |
           Set-Location src
-          if (Test-Path ./package_release.ps1) {
-            ./package_release.ps1
-          }
+          ./package_release.ps1 -Version "pr42-fa78de5" -SkipBuild
+          Get-Item .\release\OptiScaler-DLSSNR-pr42-fa78de5.zip | Select-Object FullName,Length
 
-      - name: Upload build
+      - name: Upload ready-to-use package
         uses: actions/upload-artifact@v4
         with:
-          name: OptiScaler-PR42-fa78de5
-          path: |
-            src/**/*.zip
-            src/build/**/Release/*.dll
-            src/build/**/Release/*.exe
+          name: OptiScaler-DLSSNR-PR42-fa78de5
+          path: src/release/OptiScaler-DLSSNR-pr42-fa78de5.zip
           if-no-files-found: error
           retention-days: 7
