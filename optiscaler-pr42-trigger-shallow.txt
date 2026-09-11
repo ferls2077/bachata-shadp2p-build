@@ -1,0 +1,1 @@
+Trigger shallow checkout build for PR #42.
