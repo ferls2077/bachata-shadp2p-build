@@ -1,0 +1,53 @@
+name: Build OptiScaler PR42
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout PR #42 source
+        shell: pwsh
+        run: |
+          git clone --recursive https://github.com/cmh1448/OptiScaler_DLSSNR.git src
+          git -C src checkout fa78de5c23077e3481708245bd6cda819c5f264c
+          git -C src submodule update --init --recursive
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S src -B src/build -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          cmake --build src/build --config Release --parallel
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          if (Test-Path src/package_release.ps1) {
+            Set-Location src
+            ./package_release.ps1
+          } else {
+            New-Item -ItemType Directory -Force -Path package | Out-Null
+            Get-ChildItem src/build -Recurse -File | Where-Object { $_.Extension -in '.dll','.exe','.ini','.bat' } | Copy-Item -Destination package -Force
+            Compress-Archive -Path package/* -DestinationPath OptiScaler-PR42-fa78de5.zip -Force
+          }
+
+      - name: Find package
+        shell: pwsh
+        run: |
+          Get-ChildItem src -Recurse -File | Where-Object { $_.Extension -eq '.zip' } | Select-Object FullName,Length
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: OptiScaler-PR42-fa78de5
+          path: |
+            src/**/*.zip
+            src/build/**/Release/*.dll
+            src/build/**/Release/*.exe
+          if-no-files-found: error
+          retention-days: 7
