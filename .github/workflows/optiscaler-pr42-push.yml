@@ -1,9 +1,7 @@
 name: Build OptiScaler PR42 Push
 
 on:
-  push:
-    branches:
-      - optiscaler-pr42-build
+  workflow_dispatch:
 
 jobs:
   build:
