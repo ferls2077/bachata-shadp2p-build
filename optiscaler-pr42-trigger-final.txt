@@ -1,0 +1,1 @@
+Run corrected MSBuild workflow for PR #42 at fa78de5c23077e3481708245bd6cda819c5f264c.
