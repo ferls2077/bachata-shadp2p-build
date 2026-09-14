@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: droidvm-win11-builder
+  cancel-in-progress: true
+
 jobs:
   build:
     if: github.head_ref == 'droidvm-win11-builder'
