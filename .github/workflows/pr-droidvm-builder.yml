@@ -1,0 +1,27 @@
+name: DroidVM Windows 11 ARM64 PR Build
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/pr-droidvm-builder.yml"
+      - "scripts/build-droidvm.ps1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.head_ref == 'droidvm-win11-builder'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: droidvm-win11-builder
+      - name: Build and publish DroidVM Windows package
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-droidvm.ps1
