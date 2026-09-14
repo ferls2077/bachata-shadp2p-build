@@ -29,10 +29,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Current Fido uses a different edition label for ARM64. Let Fido choose
-          # the current consumer multi-edition ISO, then the DroidVM builder selects Pro by index.
           $p = '.\scripts\build-droidvm.ps1'
           $s = Get-Content -LiteralPath $p -Raw
+
+          # Fido's current ARM64 edition label differs from the old Pro/Home label.
+          # Let it choose the consumer multi-edition image; the builder selects Pro by index.
           $s = $s.Replace(" -Ed 'Pro/Home'", '')
+
+          # Current Windows hosted runners provide a large D: data drive (~220+ GiB free),
+          # so deleting SDK/tool caches from C: only wastes several minutes.
+          $s = [regex]::Replace(
+            $s,
+            "(?s)# Free space from hosted-runner SDKs.*?Show-Disks 'Disk space after cleanup'",
+            "Show-Disks 'Disk space (cleanup not needed; build uses largest drive)'"
+          )
+
           Set-Content -LiteralPath $p -Value $s -Encoding UTF8
           powershell -NoProfile -ExecutionPolicy Bypass -File $p
