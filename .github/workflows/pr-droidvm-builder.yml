@@ -1,0 +1,48 @@
+name: DroidVM Windows 11 ARM64 PR Build
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/pr-droidvm-builder.yml"
+      - "scripts/build-droidvm.ps1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: droidvm-win11-builder
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.head_ref == 'droidvm-win11-builder'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: droidvm-win11-builder
+      - name: Build and publish DroidVM Windows package
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $p = '.\scripts\build-droidvm.ps1'
+          $s = Get-Content -LiteralPath $p -Raw
+
+          # Current Fido ARM64 consumer ISO contains Home, Home Single Language and Pro.
+          # Let Fido choose that multi-edition ISO, then select Windows 11 Pro (index 3).
+          $s = $s.Replace(" -Ed 'Pro/Home'", '')
+          $s = $s.Replace('$env:IMAGE_INDEX = ''6''', '$env:IMAGE_INDEX = ''3''')
+
+          # Current Windows hosted runners provide a large D: data drive, so cleanup is unnecessary.
+          $s = [regex]::Replace(
+            $s,
+            "(?s)# Free space from hosted-runner SDKs.*?Show-Disks 'Disk space after cleanup'",
+            "Show-Disks 'Disk space (cleanup not needed; build uses largest drive)'"
+          )
+
+          Set-Content -LiteralPath $p -Value $s -Encoding UTF8
+          powershell -NoProfile -ExecutionPolicy Bypass -File $p
