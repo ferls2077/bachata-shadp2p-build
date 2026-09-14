@@ -28,4 +28,11 @@ jobs:
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-droidvm.ps1
+        run: |
+          # Current Fido uses a different edition label for ARM64. Let Fido choose
+          # the current consumer multi-edition ISO, then the DroidVM builder selects Pro by index.
+          $p = '.\scripts\build-droidvm.ps1'
+          $s = Get-Content -LiteralPath $p -Raw
+          $s = $s.Replace(" -Ed 'Pro/Home'", '')
+          Set-Content -LiteralPath $p -Value $s -Encoding UTF8
+          powershell -NoProfile -ExecutionPolicy Bypass -File $p
