@@ -32,12 +32,12 @@ jobs:
           $p = '.\scripts\build-droidvm.ps1'
           $s = Get-Content -LiteralPath $p -Raw
 
-          # Fido's current ARM64 edition label differs from the old Pro/Home label.
-          # Let it choose the consumer multi-edition image; the builder selects Pro by index.
+          # Current Fido ARM64 consumer ISO contains Home, Home Single Language and Pro.
+          # Let Fido choose that multi-edition ISO, then select Windows 11 Pro (index 3).
           $s = $s.Replace(" -Ed 'Pro/Home'", '')
+          $s = $s.Replace('$env:IMAGE_INDEX = ''6''', '$env:IMAGE_INDEX = ''3''')
 
-          # Current Windows hosted runners provide a large D: data drive (~220+ GiB free),
-          # so deleting SDK/tool caches from C: only wastes several minutes.
+          # Current Windows hosted runners provide a large D: data drive, so cleanup is unnecessary.
           $s = [regex]::Replace(
             $s,
             "(?s)# Free space from hosted-runner SDKs.*?Show-Disks 'Disk space after cleanup'",
